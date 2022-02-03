@@ -47,6 +47,9 @@ services:
         environment:
             MINIO_ROOT_USER: minio
             MINIO_ROOT_PASSWORD: minio123
+            MINIO_API_SELECT_PARQUET: on
+        volumes:
+            - minio_data:/data
     postgres:
         container_name: airflow_postgres
         image: postgres:10
@@ -58,7 +61,9 @@ services:
         image: 'redis:5.0.5'
     webserver:
         container_name: airflow_webserver
-        << : *base_image
+        build: 
+           context: .
+#        << : *base_image
         depends_on:
             - postgres
             - redis
@@ -76,7 +81,9 @@ services:
 
     scheduler:
         container_name: airflow_scheduler
-        << : *base_image
+        build: 
+            context: .
+#        << : *base_image
         depends_on:
             - webserver
         environment:
@@ -115,3 +122,4 @@ services:
         << : *mounted_vol
 volumes:
   gp_data_lineages:
+  minio_data:

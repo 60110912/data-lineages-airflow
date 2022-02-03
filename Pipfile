@@ -4,9 +4,9 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-apache-airflow = {version = "==1.10.14", extras = ["postgres"]}
+sql-metadata = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.9"
+python_version = "3.6"

@@ -4296,3 +4296,5 @@ INSERT INTO queries_history (ctime,tmid,ssid,ccnt,username,db,"cost",tsubmit,tst
 
 SELECT *
 FROM queries_history
+
+SELECT public.fn_gp_queries_history_to_s3_operation('2020-01-01'::timestamp,'2023-01-01'::timestamp);
