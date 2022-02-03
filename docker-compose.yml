@@ -1,0 +1,117 @@
+version: "3.7"
+x-common-env: &common-env
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "airflow"
+  POSTGRES_USER: "airflow"
+  POSTGRES_PASSWORD: "airflow"
+  AIRFLOW__CORE__FERNET_KEY: "YGr6iWew8HeuUDExPRKglev0oRFq2kU1wQQl10ZtoQg="
+  AIRFLOW__CORE__COLORED_CONSOLE_LOG: "False"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__WEBSERVER__BASE_URL: "http://127.0.0.1:8080"
+  AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
+  DP__ENV: "dev"
+  #DP__METADATA_URL: "http://d-dp-metadata01.dp.hq.ru.corp.leroymerlin.com:8080"
+  #DP__METADATA_URL: "http://localhost:5000"
+  #DP__METADATA_URL_V2: "http://metadata_v2:5151"
+  DP__METADATA_URL_V2: "http://metadata.devdata.lmru.tech"
+  DP__CLUSTER: "communal"
+
+# Batch proc default image
+x-base-image: &base_image 
+  image: docker-local-dataplatform.art.lmru.tech/airflow:1.10.14-1
+
+# List of volumes to mount into airflow images
+x-mounted: &mounted_vol
+  volumes:
+    - ./dags:/usr/local/airflow/dags
+    # - ./plugins:/usr/local/airflow/plugins
+    # - ./logs:/usr/local/airflow/logs
+services:
+    gpdb:
+        image: docker-local-dataplatform.art.lmru.tech/dataplatform/infra/adb:6.11.1-pxf-warm-dev
+        ports:
+            - "5432-5532:5432"
+        volumes:
+            - "./conf/pxf:/usr/local/greenplum-db/pxf/pxf-conf/servers/default"
+            - gp_data_lineages:/data1
+        environment:
+            GP_DB: $DB_NAME
+            GP_USER: $USERNAME
+    minio:
+        image: minio/minio
+        command: server /data --console-address ":9001"
+        ports:
+            - "9000:9000"
+            - "9001:9001"
+        environment:
+            MINIO_ROOT_USER: minio
+            MINIO_ROOT_PASSWORD: minio123
+    postgres:
+        container_name: airflow_postgres
+        image: postgres:10
+        environment:
+            <<: *common-env
+
+    redis:
+        container_name: airflow_redis
+        image: 'redis:5.0.5'
+    webserver:
+        container_name: airflow_webserver
+        << : *base_image
+        depends_on:
+            - postgres
+            - redis
+        environment:
+            <<: *common-env
+        ports:
+            - "8080:8080"
+        command: webserver
+        << : *mounted_vol
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+
+    scheduler:
+        container_name: airflow_scheduler
+        << : *base_image
+        depends_on:
+            - webserver
+        environment:
+            <<: *common-env
+        command: scheduler
+        << : *mounted_vol
+
+    flower:
+        container_name: airflow_flower
+        << : *base_image
+        restart: always
+        depends_on:
+            - redis
+        environment:
+            <<: *common-env
+            CELERY_CONFIG_MODULE: airflow.config_templates.default_celery
+        ports:
+            - 5555:5555
+        command: flower
+
+    worker:
+        container_name: airflow_worker
+        build: 
+            context: .
+        restart: always
+        depends_on: 
+            - webserver
+            - scheduler
+        environment:
+            <<: *common-env
+
+    # CHANGE ME!
+    # Set queue to your module name
+    # Example: 'worker -q mymod'
+        command: worker -q data_usege
+        << : *mounted_vol
+volumes:
+  gp_data_lineages:
