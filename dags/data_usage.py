@@ -39,11 +39,18 @@ S3_CONNECTION = S3Hook(aws_conn_id='s3-data-usage')
 S3_BUCKECT = 'd-dp-data-usage'
 TARGET_CONNECTION_ID = 'data_usage_etl_bot'
 
-BOTO3_S3 = S3_CONNECTION.get_conn()
 
-def check_bucket_in_s3():
-    if (S3_CONNECTION.check_for_bucket(bucket_name=S3_BUCKECT)):
-        raise ValueError('Bucker not found')
+
+
+
+def init_boto_3_client() ->boto3.client :
+    connection = S3_CONNECTION.get_connections(conn_id='s3-data-usage')[0]
+    s3 = boto3.client('s3',
+                  endpoint_url=connection.host+":"+ str(connection.port),
+                  aws_access_key_id=connection.login,
+                  aws_secret_access_key=connection.get_password(),
+                  region_name='us-east-1')
+    return s3
 
 
 def read_data_from_s3 (s3, key: str) ->str:
@@ -83,18 +90,14 @@ def transfer_all_data_to_pg():
     logging.info(f"Start transfer data to PG {TARGET_CONNECTION_ID}")
     pg = PostgresHook(postgres_conn_id=TARGET_CONNECTION_ID)
     logging.info(f"PG hook {pg}")
-    json_query = """INSERT INTO data_usage_raw.queries_history (json_object)
-                      VALUES (%s);"""
-    # logging.info(dir(BOTO3_S3))
-    # botoinfo = BOTO3_S3.get_credentials()
-    # logging.info(f"PG hook {botoinfo}")
-    s3 = boto3.client('s3',
-                  endpoint_url='http://minio:9000',
-                  aws_access_key_id='minio',
-                  aws_secret_access_key='minio123',
-                  region_name='us-east-1')
+    s3 = init_boto_3_client()
     files = s3.list_objects(Bucket= S3_BUCKECT, Prefix='public/queries_history')
-    logging.info(files)
+    if not isinstance(files, dict):
+        return 0
+    if not 'Contents' in files:
+        return 0
+    logging.info(f"PG hook {pg}")
+    logging.debug(type(files))
     for key in files['Contents']:
         logging.debug(f"files key =  {key}")
         records = read_data_from_s3(s3=s3, key=key['Key'])
@@ -116,9 +119,7 @@ def transfer_all_data_to_pg():
                 logging.error(json_query)
             except ValueError:
                 logging.error(json_query)
-
-                
-            
+        records = s3.delete_object( Bucket= S3_BUCKECT, Key=key['Key'])
 
 
 def create_dag(dag_id, config):
@@ -148,12 +149,7 @@ def create_dag(dag_id, config):
             access_control=access_control
         )
         priority_weight = 100
-        check_bucet_exist = PythonOperator(
-            task_id='check_bucket_in_s3',
-            python_callable=check_bucket_in_s3,
-            provide_context=False,
-            dag=dag
-        )
+
         upload_data_to_s3 = PostgresOperator(
                             task_id='set_data_to_s3',
                             sql=f"""SELECT fn_gp_queries_history_to_s3_operation(
@@ -171,7 +167,7 @@ def create_dag(dag_id, config):
             provide_context=False,
             dag=dag
         )
-        check_bucet_exist >> upload_data_to_s3 >> transfer_data
+        upload_data_to_s3 >> transfer_data
         return dag
     except Exception as e:
         logging.error(f"Unable to create DAG {dag_id}: {traceback.format_exc()}")
