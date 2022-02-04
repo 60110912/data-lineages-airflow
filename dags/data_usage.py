@@ -10,14 +10,18 @@ from airflow.operators.postgres_operator import PostgresOperator
 from airflow.hooks.S3_hook import S3Hook
 from airflow.hooks.postgres_hook import PostgresHook
 from airflow.operators.python_operator import PythonOperator
+from funcsigs import Parameter
 from sql_metadata import Parser
+import boto3
+import json
 
 
 dag_folder = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, dag_folder)
 
 #from data_usage import  get_meta
-
+class NoDataInS3(Exception):
+    pass 
 
 
 MODULE_NAME = 'data_usage'
@@ -31,20 +35,30 @@ DEFAULT_CAN_EDIT = ['dataplatform', 'datamanagement']
 DEFAULT_TAG = ['datamanagement', 'data_usage']
 base_url = os.environ.get("DP__METADATA_URL_V2")
 api_endpoint = "/api/v2/"
-S3_CONNECTION = S3Hook(aws_conn_id='s3-data-usege')
+S3_CONNECTION = S3Hook(aws_conn_id='s3-data-usage')
 S3_BUCKECT = 'd-dp-data-usage'
-TARGET_CONNECTION_ID = 'data_useges_etl_bot'
+TARGET_CONNECTION_ID = 'data_usage_etl_bot'
 
 
-def check_bucket_in_s3():
-    if (S3_CONNECTION.check_for_bucket(bucket_name=S3_BUCKECT)):
-        raise ValueError('Bucker not found')
 
 
-def read_data_from_s3 (key: str) ->str:
+
+def init_boto_3_client() ->boto3.client :
+    connection = S3_CONNECTION.get_connections(conn_id='s3-data-usage')[0]
+    s3 = boto3.client('s3',
+                  endpoint_url=connection.host+":"+ str(connection.port),
+                  aws_access_key_id=connection.login,
+                  aws_secret_access_key=connection.get_password(),
+                  region_name='us-east-1')
+    return s3
+
+
+def read_data_from_s3 (s3, key: str) ->str:
     """ Функция получает по ключю из файла все данны и склеивает в одну большую строку
     """
-    records = S3_CONNECTION.select_key(
+    logging.info("read_data_from_s3")
+    logging.info(f"for key={key}")
+    r = s3.select_object_content(
         Bucket=S3_BUCKECT,
         Key=key,
         ExpressionType='SQL',
@@ -66,26 +80,46 @@ def read_data_from_s3 (key: str) ->str:
             'RecordDelimiter': '\n'
         }},
     )
-    return records
+    for event in r['Payload']:
+        if 'Records' in event:
+         records = event['Records']['Payload'].decode('utf-8')
+         return records
+    raise NoDataInS3('No data in S3')
 
 def transfer_all_data_to_pg():
+    logging.info(f"Start transfer data to PG {TARGET_CONNECTION_ID}")
     pg = PostgresHook(postgres_conn_id=TARGET_CONNECTION_ID)
-    json_query = """INSERT INTO json_query (json_object)
-                      VALUES (%s);"""
-    files = S3_CONNECTION.list_prefixes(bucket_name=S3_BUCKECT, prefix='/public/queries_history/')
-    for key in files:
-        records = read_data_from_s3(key=key)
+    logging.info(f"PG hook {pg}")
+    s3 = init_boto_3_client()
+    files = s3.list_objects(Bucket= S3_BUCKECT, Prefix='public/queries_history')
+    if not isinstance(files, dict):
+        return 0
+    if not 'Contents' in files:
+        return 0
+    logging.info(f"PG hook {pg}")
+    logging.debug(type(files))
+    for key in files['Contents']:
+        logging.debug(f"files key =  {key}")
+        records = read_data_from_s3(s3=s3, key=key['Key'])
+        logging.debug(f"reconds =  {records}")
         for record in records.split("\n"):
-            row = json.loads(record)
-            sql = row['query_text']
+            logging.debug(f"row to parsing =  {records}")
             try:
+                row = json.loads(record)
+                sql = row['query_text']
                 parser = Parser(sql)
                 row['tables'] = parser.tables
                 row['columns'] = parser.columns
+                row_to_pg = json.dumps(row)
+                json_query = f"""INSERT INTO data_usage_raw.queries_history (json_object)
+                        VALUES ($${row_to_pg}$$);"""
+                logging.debug(json_query)
+                pg.run(sql=json_query)
+            except  json.JSONDecodeError:
+                logging.error(json_query)
             except ValueError:
-                pass
-            row_to_pg = json.dumps(row)
-            pg.run(sql=json_query, autocommit=True, parameters=(row_to_pg))
+                logging.error(json_query)
+        records = s3.delete_object( Bucket= S3_BUCKECT, Key=key['Key'])
 
 
 def create_dag(dag_id, config):
@@ -98,10 +132,10 @@ def create_dag(dag_id, config):
             'owner': config['owner'],
             'depends_on_past': False,
             'start_date': start_date,
-            'retries': 4,
+            'retries': 1,
             'retry_delay': timedelta(minutes=1),
             'provide_context': True,
-            'queue': 'partitioning_v2',
+            'queue': 'data_usage',
             'email': config['email'],
             'email_on_failure': True,
             'email_on_retry': False
@@ -112,20 +146,15 @@ def create_dag(dag_id, config):
             schedule_interval=config['schedule'],
             max_active_runs=1,
             tags=tags,
-            # pool=POOL,
             access_control=access_control
         )
         priority_weight = 100
-        check_bucet_exist = PythonOperator(
-            task_id='check_bucket_in_s3',
-            python_callable=check_bucket_in_s3,
-            dag=dag
-        )
+
         upload_data_to_s3 = PostgresOperator(
                             task_id='set_data_to_s3',
-                            sql=f"""fn_gp_queries_history_to_s3_operation(
-                                p_date_from := '{start_date}'::timestamp,
-                                p_date_to := '{start_date}'::timestamp + '1 day'::interval
+                            sql=f"""SELECT fn_gp_queries_history_to_s3_operation(
+                                p_date_from := '{start_date}'::timestamp ,
+                                p_date_to := '{start_date}'::timestamp + '1 day'::interval 
                             )""",
                             postgres_conn_id=CONNECTION_ID,
                             pool=POOL,
@@ -135,17 +164,18 @@ def create_dag(dag_id, config):
         transfer_data = PythonOperator(
             task_id='transfer_data_to_pg',
             python_callable=transfer_all_data_to_pg,
+            provide_context=False,
             dag=dag
         )
-        check_bucet_exist >> upload_data_to_s3 >> transfer_data
+        upload_data_to_s3 >> transfer_data
         return dag
     except Exception as e:
         logging.error(f"Unable to create DAG {dag_id}: {traceback.format_exc()}")
         print(e)
 
 conf ={
-    'start_date': '2010-01-01',
-    'schedule': '0 * * * *',
+    'start_date': '2020-01-01',
+    'schedule': '@daily',
     'owner': 'data',
     'email': 'test@test.ru'
 }
