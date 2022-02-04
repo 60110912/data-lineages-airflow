@@ -114,12 +114,21 @@ services:
             - scheduler
         environment:
             <<: *common-env
-
     # CHANGE ME!
     # Set queue to your module name
     # Example: 'worker -q mymod'
-        command: worker -q data_usege
+        command: worker -q data_usage
         << : *mounted_vol
+    data_line_db:
+        image: postgres:14
+        environment: 
+            - POSTGRES_USER=${PG_DB_USER}
+            - POSTGRES_PASSWORD=${PG_DB_PASS}
+            - POSTGRES_DB=data_lineage
+        ports:
+            - '7432:5432'
+        volumes:
+            - ./pg_sql/:/docker-entrypoint-initdb.d
 volumes:
-  gp_data_lineages:
-  minio_data:
+    minio_data:
+    gp_data_lineages:

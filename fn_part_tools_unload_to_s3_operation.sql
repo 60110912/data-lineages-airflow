@@ -22,7 +22,7 @@ begin
         var_s3_connect = 'pxf://'|| p_s3_bucket 
         ||'/public/'||var_target_table_name || '/date_' || var_end_table 
         || '?PROFILE=s3:text&SERVER='|| p_s3_server_name 
-        || '&COMPRESSION_CODEC=org.apache.hadoop.io.compress.GzipCodec&S3_SELECT=ON';
+        || '&COMPRESSION_CODEC=org.apache.hadoop.io.compress.GzipCodec';
     
     var_sql_exec = ' DROP EXTERNAL TABLE if exists ' || var_ext_write_table_name || ' cascade;';
     RAISE NOTICE 'var_sql_exec  %', var_sql_exec;
