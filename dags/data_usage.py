@@ -45,6 +45,8 @@ TARGET_CONNECTION_ID = 'data_usage_etl_bot'
 
 
 def init_boto_3_client() ->boto3.client :
+    """Функция инициализирует клиента, для работы с S3.
+    """
     connection = S3_CONNECTION.get_connections(conn_id='s3-data-usage')[0]
     s3 = boto3.client('s3',
                   endpoint_url=connection.host+":"+ str(connection.port),
@@ -88,6 +90,8 @@ def read_data_from_s3 (s3, key: str) ->str:
     raise NoDataInS3('No data in S3')
 
 def get_table_struct(colums: list) -> list:
+    """ Фкнкция выделяет из колонки схему, имя таблицы и саму колонку
+    """
     result = []
     table_colums = {}
     if len(colums) == 0:
@@ -99,7 +103,7 @@ def get_table_struct(colums: list) -> list:
             table_colums = {
                 'table_schema' : colum[0],
                 'table_name' : colum[1],
-                 'table_colum' : colum[2],
+                'table_colum' : colum[2],
             }
         elif len(colum) == 2:
             table_colums = {
@@ -111,6 +115,8 @@ def get_table_struct(colums: list) -> list:
     return result
 
 def transfer_all_data_to_pg():
+    '''Функция переносит данные из S3 и PG.
+    '''
     logging.info(f"Start transfer data to PG {TARGET_CONNECTION_ID}")
     pg = PostgresHook(postgres_conn_id=TARGET_CONNECTION_ID)
     logging.info(f"PG hook {pg}")
@@ -153,7 +159,7 @@ def create_dag(dag_id, config):
         start_date = datetime.strptime(config['start_date'], '%Y-%m-%d')
         access_list = ['test']
         tags = []
-        access_control = {item: {'can_dag_edit'} for item in ['dp']}
+        access_control = {item: {'can_dag_edit'} for item in ['datamanagement']}
         default_args = {
             'owner': config['owner'],
             'depends_on_past': False,
