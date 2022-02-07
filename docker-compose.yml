@@ -55,6 +55,8 @@ services:
         image: postgres:10
         environment:
             <<: *common-env
+        volumes:
+            - airflow_gp:/var/lib/postgresql/data
 
     redis:
         container_name: airflow_redis
@@ -132,3 +134,4 @@ services:
 volumes:
     minio_data:
     gp_data_lineages:
+    airflow_gp:
